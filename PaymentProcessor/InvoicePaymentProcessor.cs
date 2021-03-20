@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using PaymentProcessor.Extensions;
 
 namespace PaymentProcessor
 {
@@ -12,74 +13,69 @@ namespace PaymentProcessor
 			_invoiceRepository = invoiceRepository;
 		}
 
+		private string ValidatePayment( Payment payment, Invoice invoice )
+		{
+			if ( invoice == null )
+				throw new InvalidOperationException("There is no invoice matching this payment");
+
+			if ( invoice.Amount == 0 )
+			{
+				if ( invoice.Payments.IsNullOrEmpty() )
+					return "no payment needed";
+
+				throw new InvalidOperationException("The invoice is in an invalid state, it has an amount of 0 and it has payments.");
+			}
+
+			var totalPayments = invoice.Payments.Sum( x => x.Amount );
+			var outstandingBalance = invoice.Amount - invoice.AmountPaid;
+
+			if ( payment.Amount > invoice.Amount )
+				return "the payment is greater than the invoice amount";
+
+			if ( invoice.Amount == totalPayments )
+				return "invoice was already fully paid";
+
+			if ( payment.Amount > outstandingBalance )
+				return "the payment is greater than the partial amount remaining";
+
+			return null;
+		}
+
 		public string ProcessPayment( Payment payment )
 		{
-			var inv = _invoiceRepository.GetInvoice( payment.Reference );
+			var invoice = _invoiceRepository.GetInvoice( payment.Reference );
 
-			if ( inv == null )
+			var validatePayment = ValidatePayment( payment, invoice );
+
+			if ( !validatePayment.IsNullOrEmpty() )
+				return validatePayment;
+
+			if ( !invoice.Payments.IsNullOrEmpty() )
 			{
-				throw new InvalidOperationException( "There is no invoice matching this payment" );
-			}
-			else
-			{
-				if ( inv.Amount == 0 )
+				invoice.AddPayment( payment );
+
+				var outstandingBalance = invoice.Amount - invoice.AmountPaid;
+
+				if ( outstandingBalance == 0 )
 				{
-					if ( inv.Payments == null || !inv.Payments.Any( ) )
-					{
-						return "no payment needed";
-					}
-					else
-					{
-						throw new InvalidOperationException( "The invoice is in an invalid state, it has an amount of 0 and it has payments." );
-					}
+					return "final partial payment received, invoice is now fully paid";
 				}
 				else
 				{
-					if ( inv.Payments != null && inv.Payments.Any( ) )
-					{
-						if ( inv.Payments.Sum( x => x.Amount ) != 0 && inv.Amount == inv.Payments.Sum( x => x.Amount ) )
-						{
-							return "invoice was already fully paid";
-						}
-						else if ( inv.Payments.Sum( x => x.Amount ) != 0 && payment.Amount > ( inv.Amount - inv.AmountPaid ) )
-						{
-							return "the payment is greater than the partial amount remaining";
-						}
-						else
-						{
-							if ( ( inv.Amount - inv.AmountPaid ) == payment.Amount )
-							{
-								inv.AmountPaid += payment.Amount;
-								inv.Payments.Add( payment );
-								return "final partial payment received, invoice is now fully paid";
-							}
-							else
-							{
-								inv.AmountPaid += payment.Amount;
-								inv.Payments.Add( payment );
-								return "another partial payment received, still not fully paid";
-							}
-						}
-					}
-					else
-					{
-						if ( payment.Amount > inv.Amount )
-						{
-							return "the payment is greater than the invoice amount";
-						}
-						else if ( inv.Amount == payment.Amount )
-						{
-							inv.AmountPaid = payment.Amount;
-							inv.Payments.Add( payment );
-							return "invoice is now fully paid";
-						}
-						else
-						{
-							inv.AmountPaid = payment.Amount;
-							inv.Payments.Add( payment );
-							return "invoice is now partially paid";
-						}
-					}
+					return "another partial payment received, still not fully paid";
+				}
+			}
+			else
+			{
+				invoice.AddPayment( payment );
+
+				if ( invoice.Amount == payment.Amount )
+				{
+					return "invoice is now fully paid";
+				}
+				else
+				{
+					return "invoice is now partially paid";
 				}
 			}
 		}
